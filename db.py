@@ -1,7 +1,7 @@
 import sqlite3
 
 def get_db():
-    return sqlite3.connect("database.db", check_same_thread=False)
+    return sqlite3.connect("database.db", check_same_thread=False, timeout=10)
 
 def init_db():
     db = get_db()
@@ -15,12 +15,13 @@ def init_db():
     """)
 
     db.execute("""
-    CREATE TABLE IF NOT EXISTS urls (
+    CREATE TABLE IF NOT EXISTS listas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         url TEXT UNIQUE,
-        status TEXT,
-        response_time REAL,
-        last_check TEXT
+        estado TEXT,
+        exp TEXT,
+        canales INTEGER,
+        ultima_revision TEXT
     )
     """)
 
