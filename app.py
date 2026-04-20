@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, redirect, session, send_file
-import requests
+import requests, time
 from datetime import datetime
 from db import get_db, init_db
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -34,7 +34,6 @@ def login():
 
     return render_template("login.html")
 
-# ===== LOGOUT =====
 @app.route("/logout")
 def logout():
     session.clear()
@@ -50,48 +49,54 @@ def format_fecha(ts):
     except:
         return "N/A"
 
-# ===== VERIFICACIÓN PRO =====
+# ===== VERIFICACIÓN REAL =====
 def verificar(url):
     try:
-        # ===== IPTV USER/PASS =====
-        if "get.php" in url:
+        if "username=" in url and "password=" in url:
+
             base = url.split("/get.php")[0]
             user = url.split("username=")[1].split("&")[0]
             password = url.split("password=")[1].split("&")[0]
 
             api = f"{base}/player_api.php?username={user}&password={password}"
 
-            r = requests.get(api, timeout=10)
-            data = r.json()
+            r = requests.get(api, timeout=8)
 
+            if r.status_code != 200:
+                return None
+
+            data = r.json()
             info = data.get("user_info", {})
             server = data.get("server_info", {})
 
-            if info.get("auth") == 1:
-                return {
-                    "estado": "OK",
-                    "exp": format_fecha(info.get("exp_date")),
-                    "canales": 0
-                }
-            else:
-                return {"estado": "INVALID", "exp": "N/A", "canales": 0}
+            if info.get("auth") != 1:
+                return None
 
-        # ===== LISTA PUBLICA =====
-        else:
-            r = requests.get(url, timeout=10)
+            # ===== VALIDAR CANALES =====
+            try:
+                m3u = requests.get(url, timeout=8).text
+                canales = m3u.count("#EXTINF")
+                if canales < 5:
+                    return None
+            except:
+                return None
 
-            if r.status_code == 200 and "#EXTM3U" in r.text:
-                canales = r.text.count("#EXTINF")
-                return {
-                    "estado": "OK",
-                    "exp": "N/A",
-                    "canales": canales
-                }
+            return {
+                "user": user,
+                "pass": password,
+                "exp": format_fecha(info.get("exp_date")),
+                "created": format_fecha(info.get("created_at")),
+                "active": info.get("active_cons", 0),
+                "max": info.get("max_connections", 0),
+                "timezone": server.get("timezone", "N/A"),
+                "server": base,
+                "m3u": url
+            }
 
-            return {"estado": "INVALID", "exp": "N/A", "canales": 0}
+        return None
 
     except:
-        return {"estado": "ERROR", "exp": "N/A", "canales": 0}
+        return None
 
 # ===== HOME =====
 @app.route("/")
@@ -99,79 +104,60 @@ def home():
     if not auth():
         return redirect("/login")
 
-    db = get_db()
-    listas = db.execute("SELECT * FROM listas").fetchall()
-
-    total = len(listas)
-    ok = len([l for l in listas if l[2] == "OK"])
-    bad = len([l for l in listas if l[2] == "INVALID"])
-
-    return render_template("index.html", listas=listas, total=total, ok=ok, bad=bad)
-
-# ===== AÑADIR =====
-@app.route("/add", methods=["POST"])
-def add():
-    if not auth():
-        return jsonify({"error":"login"})
-
-    urls = request.json["urls"].split("\n")
-    db = get_db()
-
-    for url in urls:
-        url = url.strip()
-        if url:
-            try:
-                db.execute("INSERT INTO listas (url,estado) VALUES (?,?)",(url,"NEW"))
-            except:
-                pass
-
-    db.commit()
-    return jsonify({"ok":True})
+    return render_template("index.html")
 
 # ===== SCAN =====
-@app.route("/scan")
+@app.route("/scan", methods=["POST"])
 def scan():
     if not auth():
         return jsonify({"error":"login"})
 
-    db = get_db()
-    listas = db.execute("SELECT * FROM listas").fetchall()
+    urls = request.json["urls"].split("\n")
 
-    for l in listas:
-        resultado = verificar(l[1])
+    resultados = []
 
-        db.execute("""
-        UPDATE listas 
-        SET estado=?, exp=?, canales=?, ultima_revision=? 
-        WHERE id=?
-        """,
-        (
-            resultado["estado"],
-            resultado["exp"],
-            resultado["canales"],
-            datetime.now().strftime("%d/%m/%Y %H:%M"),
-            l[0]
-        ))
+    for url in urls:
+        url = url.strip()
+        if not url:
+            continue
 
-    db.commit()
-    return jsonify({"ok":True})
+        data = verificar(url)
+
+        if data:
+            resultados.append(data)
+
+        time.sleep(1.5)  # 🔥 MODO HUMANO
+
+    return jsonify(resultados)
 
 # ===== EXPORT =====
-@app.route("/export")
+@app.route("/export", methods=["POST"])
 def export():
-    db = get_db()
-    listas = db.execute("SELECT * FROM listas WHERE estado='OK'").fetchall()
+    data = request.json
 
-    with open("validas.txt","w",encoding="utf-8") as f:
-        for l in listas:
-            f.write(f"""URL: {l[1]}
-EXP: {l[3]}
-CANALES: {l[4]}
+    with open("hits.txt","w",encoding="utf-8") as f:
+        for c in data:
+            f.write(f"""╭───✦ HIT HUNTER
+├● 👑 ᴜꜱᴇʀ : {c['user']}
+├● 🔐 ᴩᴀꜱꜱ : {c['pass']}
+├● ✅ ꜱᴛᴀᴛᴜꜱ : Active
+├● 📶 ᴀᴄᴛɪᴠᴇ : {c['active']}
+├● 📡 ᴍᴀx : {c['max']}
+├● ⏰ ᴄʀᴇᴀᴛᴇᴅ : {c['created']}
+├● 📅 ᴇxᴘɪʀᴀᴛɪᴏɴ : {c['exp']}
+├● 🌐 ꜱᴇʀᴠᴇʀ : {c['server']}
+├● 🕰️ ᴛɪᴍᴇᴢᴏɴᴇ : {c['timezone']}
+├● ⚡ ꜱᴄᴀɴᴛʏᴩᴇ : panel
+├● 👤 нιт вʏ : PANEL PRO
+╰───✦ 🚀
+
+🌐 ᴍ3ᴜ : {c['m3u']}
+
 
 """)
 
-    return send_file("validas.txt", as_attachment=True)
+    return send_file("hits.txt", as_attachment=True)
 
-# ===== RUN =====
 if __name__ == "__main__":
     app.run()
+ 
