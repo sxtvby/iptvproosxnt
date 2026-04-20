@@ -2,19 +2,17 @@
 <html>
 <body style="background:#0f172a;color:white;text-align:center">
 
-<h1>IPTV PANEL PRO</h1>
+<h1>STREAM PANEL</h1>
 
 <h3>Total: {{total}} | OK: {{ok}} | INVALID: {{bad}}</h3>
 
 <textarea id="urls" style="width:90%;height:100px;"></textarea><br><br>
 
 <button onclick="add()">➕ Añadir</button>
-
 <button onclick="scan()" style="background:green;color:white;padding:10px;">
-🔍 Verificar Listas
+🔍 Escanear
 </button>
-
-<a href="/export"><button>📥 Exportar</button></a>
+<a href="/export"><button>📥 Exportar válidas</button></a>
 
 <h2>Listas</h2>
 
@@ -23,13 +21,11 @@
 
 {{l[1]}}<br>
 
-Estado: 
+Estado:
 {% if l[2] == "OK" %}
 <span style="color:lime;">OK</span>
 {% elif l[2] == "INVALID" %}
 <span style="color:red;">INVALID</span>
-{% elif l[2] == "STREAM_FAIL" %}
-<span style="color:orange;">STREAM FAIL</span>
 {% else %}
 <span style="color:gray;">{{l[2]}}</span>
 {% endif %}
@@ -52,8 +48,7 @@ body:JSON.stringify({urls:document.getElementById("urls").value})
 }
 
 function scan(){
-fetch("/scan")
-.then(()=>location.reload());
+fetch("/scan").then(()=>location.reload());
 }
 </script>
 
