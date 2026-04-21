@@ -1,107 +1,41 @@
-from flask import Flask, render_template, request, jsonify, redirect, session, send_file
-import requests, threading
+from flask import Flask, render_template, request, jsonify, send_file
+import requests
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 from db import get_db, init_db
+import time
 
 app = Flask(__name__)
-app.secret_key = "secret123"
-
 init_db()
 
-# ===== USER =====
-db = get_db()
-try:
-    db.execute("INSERT INTO users (user,pass) VALUES (?,?)", ("admin","admin"))
+# ===== LIMPIAR DB AUTOMATICAMENTE =====
+def limpiar_db():
+    db = get_db()
+    db.execute("DELETE FROM listas")
     db.commit()
-except:
-    pass
 
-# ===== LOGIN =====
-@app.route("/login", methods=["GET","POST"])
-def login():
-    if request.method == "POST":
-        user = request.form["user"]
-        password = request.form["pass"]
-
-        db = get_db()
-        u = db.execute("SELECT * FROM users WHERE user=? AND pass=?",(user,password)).fetchone()
-
-        if u:
-            session["user"] = user
-            return redirect("/")
-
-    return render_template("login.html")
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/login")
-
-def auth():
-    return "user" in session
-
-# ===== FECHA =====
-def fmt_fecha(ts):
+# ===== FORMATO FECHA =====
+def format_fecha(ts):
     try:
         return datetime.fromtimestamp(int(ts)).strftime('%d/%m/%Y')
     except:
         return "N/A"
 
-# ===== VERIFICAR STREAM REAL =====
-def canal_funciona(stream_url):
+# ===== VERIFICAR CANAL REAL =====
+def check_stream(m3u):
     try:
-        r = requests.get(stream_url, timeout=4, stream=True)
-        return r.status_code == 200
+        r = requests.get(m3u, timeout=8)
+        if "#EXTINF" in r.text:
+            lines = r.text.split("\n")
+            for l in lines:
+                if "http" in l:
+                    test = requests.get(l.strip(), timeout=5, stream=True)
+                    return test.status_code == 200
+        return False
     except:
         return False
 
-# ===== DETECTAR CANALES REALES =====
-def check_canales(url):
-    try:
-        r = requests.get(url, timeout=5)
-        if "#EXTM3U" not in r.text:
-            return 0
-
-        lines = r.text.splitlines()
-        canales = [l for l in lines if l.startswith("http")]
-
-        validos = 0
-
-        # 🔥 SOLO PRUEBA LOS PRIMEROS 5 (anti bloqueo)
-        for c in canales[:5]:
-            if canal_funciona(c):
-                validos += 1
-
-        return validos
-
-    except:
-        return 0
-
-# ===== FORMATO =====
-def format_ok(c):
-    return f"""╭───✦ HIT HUNTER
-├● 👑 ᴜꜱᴇʀ : {c['user']}
-├● 🔐 ᴩᴀꜱꜱ : {c['pass']}
-├● ✅ ꜱᴛᴀᴛᴜꜱ : Active
-├● 📶 ᴀᴄᴛɪᴠᴇ : {c['active']}
-├● 📡 ᴍᴀx : {c['max']}
-├● ⏰ ᴄʀᴇᴀᴛᴇᴅ : {c['created']}
-├● 📅 ᴇxᴘɪʀᴀᴛɪᴏɴ : {c['exp']}
-├● 🌐 ꜱᴇʀᴠᴇʀ : {c['server']}
-├● 🕰️ ᴛɪᴍᴇᴢᴏɴᴇ : {c['timezone']}
-├● 📺 ᴄᴀɴᴀʟᴇꜱ : {c['canales']} (reales)
-├● ⚡ ꜱᴄᴀɴᴛʏᴩᴇ : combo scanner
-├● 👤 нιт вʏ : PANEL PRO
-╰───✦ 🚀
-
-🌐 ᴍ3ᴜ : {c['url']}
-"""
-
-# ===== VERIFICAR UNO =====
-def verificar_one(row):
-    id, url = row[0], row[1]
-    db = get_db()
+# ===== VERIFICACION PRINCIPAL =====
+def verificar(url):
 
     try:
         base = url.split("/get.php")[0]
@@ -109,84 +43,66 @@ def verificar_one(row):
         password = url.split("password=")[1].split("&")[0]
 
         api = f"{base}/player_api.php?username={user}&password={password}"
-        r = requests.get(api, timeout=6)
 
-        if r.status_code != 200:
-            db.execute("UPDATE listas SET estado='ERROR', resultado='❌ SIN RESPUESTA' WHERE id=?", (id,))
-            db.commit()
-            return
-
+        r = requests.get(api, timeout=10)
         data = r.json()
+
         info = data.get("user_info", {})
         server = data.get("server_info", {})
 
         if info.get("auth") != 1:
-            db.execute("UPDATE listas SET estado='BAD', resultado='❌ INVALIDA' WHERE id=?", (id,))
-            db.commit()
-            return
+            return "❌ ERROR"
 
-        # 🔥 VALIDAR CANALES REALES
-        canales = check_canales(url)
+        exp = format_fecha(info.get("exp_date"))
+        created = format_fecha(info.get("created_at"))
+        active = info.get("active_cons", "0")
+        maxc = info.get("max_connections", "0")
+        timezone = server.get("timezone", "N/A")
 
-        if canales == 0:
-            db.execute("UPDATE listas SET estado='BAD', resultado='❌ SIN CANALES FUNCIONALES' WHERE id=?", (id,))
-            db.commit()
-            return
+        m3u = url
 
-        c = {
-            "user": user,
-            "pass": password,
-            "active": info.get("active_cons", "0"),
-            "max": info.get("max_connections", "0"),
-            "created": fmt_fecha(info.get("created_at")),
-            "exp": fmt_fecha(info.get("exp_date")),
-            "server": base,
-            "timezone": server.get("timezone","N/A"),
-            "canales": canales,
-            "url": url
-        }
+        # 🔥 CHECK REAL DE CANAL
+        canal_ok = check_stream(m3u)
 
-        db.execute("UPDATE listas SET estado='OK', resultado=? WHERE id=?",
-                   (format_ok(c), id))
-        db.commit()
+        if not canal_ok:
+            return "❌ ERROR (sin señal)"
+
+        resultado = f"""╭───✦ HIT HUNTER
+├● 👑 ᴜꜱᴇʀ : {user}
+├● 🔐 ᴩᴀꜱꜱ : {password}
+├● ✅ ꜱᴛᴀᴛᴜꜱ : Active
+├● 📶 ᴀᴄᴛɪᴠᴇ : {active}
+├● 📡 ᴍᴀx : {maxc}
+├● ⏰ ᴄʀᴇᴀᴛᴇᴅ : {created}
+├● 📅 ᴇxᴘɪʀᴀᴛɪᴏɴ : {exp}
+├● 🌐 ꜱᴇʀᴠᴇʀ : {base}
+├● 🕰️ ᴛɪᴍᴇᴢᴏɴᴇ : {timezone}
+├● ⚡ ꜱᴄᴀɴᴛʏᴩᴇ : panel
+├● 👤 нιт вʏ : PANEL PRO
+╰───✦ 🚀
+
+🌐 ᴍ3ᴜ : {m3u}
+"""
+
+        return resultado
 
     except:
-        db.execute("UPDATE listas SET estado='ERROR', resultado='❌ ERROR' WHERE id=?", (id,))
-        db.commit()
+        return "❌ ERROR"
 
-# ===== SCAN BACKGROUND =====
-def scan_background():
+# ===== HOME =====
+@app.route("/")
+def home():
     db = get_db()
     listas = db.execute("SELECT * FROM listas").fetchall()
+    return render_template("index.html", listas=listas)
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        executor.map(verificar_one, listas)
-
-# ===== START =====
-@app.route("/verificar")
-def scan():
-    threading.Thread(target=scan_background).start()
-    return jsonify({"ok":True})
-
-# ===== RESULTS =====
-@app.route("/results")
-def results():
-    db = get_db()
-    listas = db.execute("SELECT * FROM listas").fetchall()
-
-    return jsonify([
-        {"estado": l[2], "resultado": l[3]}
-        for l in listas
-    ])
-
-# ===== ADD =====
+# ===== AÑADIR + LIMPIAR =====
 @app.route("/add", methods=["POST"])
 def add():
+    limpiar_db()  # 🔥 BORRA ANTES DE NUEVO SCAN
+
     urls = request.json["urls"].split("\n")
     db = get_db()
-
-    # 🔥 LIMPIA ANTES DE AÑADIR (SOLUCIÓN REPETIDOS)
-    db.execute("DELETE FROM listas")
 
     for url in urls:
         url = url.strip()
@@ -196,24 +112,40 @@ def add():
     db.commit()
     return jsonify({"ok":True})
 
-# ===== EXPORT =====
+# ===== VERIFICAR =====
+@app.route("/scan")
+def scan():
+
+    db = get_db()
+    listas = db.execute("SELECT * FROM listas").fetchall()
+
+    for l in listas:
+
+        res = verificar(l[1])
+
+        estado = "OK" if "HIT HUNTER" in res else "ERROR"
+
+        db.execute("UPDATE listas SET estado=?, resultado=? WHERE id=?",
+                   (estado, res, l[0]))
+
+        db.commit()
+
+        time.sleep(1)  # 🔥 anti bloqueo
+
+    return jsonify({"ok":True})
+
+# ===== EXPORTAR =====
 @app.route("/export")
 def export():
     db = get_db()
     listas = db.execute("SELECT resultado FROM listas WHERE estado='OK'").fetchall()
 
-    with open("validas.txt","w",encoding="utf-8") as f:
+    with open("hits.txt","w",encoding="utf-8") as f:
         for l in listas:
             f.write(l[0] + "\n\n")
 
-    return send_file("validas.txt", as_attachment=True)
+    return send_file("hits.txt", as_attachment=True)
 
-# ===== HOME =====
-@app.route("/")
-def home():
-    if not auth():
-        return redirect("/login")
-    return render_template("index.html")
-
+# ===== RUN =====
 if __name__ == "__main__":
     app.run()
