@@ -7,19 +7,12 @@ def init_db():
     db = get_db()
 
     db.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        password TEXT
-    )
-    """)
-
-    db.execute("""
     CREATE TABLE IF NOT EXISTS listas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         url TEXT UNIQUE,
         estado TEXT,
-        resultado TEXT DEFAULT ''
+        canales INTEGER,
+        ultima_revision TEXT
     )
     """)
 
