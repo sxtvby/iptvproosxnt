@@ -9,9 +9,17 @@ def init_db():
     db.execute("""
     CREATE TABLE IF NOT EXISTS listas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url TEXT UNIQUE,
+        url TEXT,
         estado TEXT,
         resultado TEXT
+    )
+    """)
+
+    db.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user TEXT,
+        pass TEXT
     )
     """)
 
