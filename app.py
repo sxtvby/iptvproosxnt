@@ -1,40 +1,10 @@
-from flask import Flask, render_template, request, jsonify, redirect, session, send_file
+from flask import Flask, render_template, request, jsonify
 import requests, time
 from db import get_db, init_db
-from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "secret123"
 
 init_db()
-
-# ===== ADMIN =====
-db = get_db()
-try:
-    db.execute("INSERT INTO users (username,password) VALUES (?,?)",
-               ("admin", generate_password_hash("admin123")))
-    db.commit()
-except:
-    pass
-
-# ===== LOGIN =====
-@app.route("/login", methods=["GET","POST"])
-def login():
-    if request.method == "POST":
-        user = request.form["user"]
-        password = request.form["password"]
-
-        db = get_db()
-        u = db.execute("SELECT * FROM users WHERE username=?", (user,)).fetchone()
-
-        if u and check_password_hash(u[2], password):
-            session["user"] = user
-            return redirect("/")
-
-    return render_template("login.html")
-
-def auth():
-    return "user" in session
 
 # ===== FORMATO =====
 def format_output(c):
@@ -58,7 +28,7 @@ def format_output(c):
 🌐 ᴍ3ᴜ : {c['url']}
 """
 
-# ===== VERIFICACIÓN SEGURA =====
+# ===== VERIFICACIÓN REAL =====
 def verificar(url):
     try:
         if "username=" not in url:
@@ -76,11 +46,7 @@ def verificar(url):
         if r.status_code != 200:
             return None
 
-        try:
-            data = r.json()
-        except:
-            return None
-
+        data = r.json()
         latency = int((time.time() - t1)*1000)
 
         info = data.get("user_info", {})
@@ -89,7 +55,6 @@ def verificar(url):
         if info.get("auth") != 1:
             return None
 
-        # ===== CONTAR CANALES =====
         canales = 0
         try:
             m3u = requests.get(url, timeout=6).text
@@ -116,16 +81,6 @@ def verificar(url):
     except:
         return None
 
-# ===== HOME =====
-@app.route("/")
-def home():
-    if not auth():
-        return redirect("/login")
-
-    db = get_db()
-    listas = db.execute("SELECT * FROM listas").fetchall()
-    return render_template("index.html", listas=listas)
-
 # ===== ADD =====
 @app.route("/add", methods=["POST"])
 def add():
@@ -143,45 +98,50 @@ def add():
     db.commit()
     return jsonify({"ok":True})
 
-# ===== SCAN NO BLOQUEANTE =====
+# ===== SCAN CONTROLADO =====
 @app.route("/scan")
 def scan():
     db = get_db()
-    listas = db.execute("SELECT * FROM listas").fetchall()
+    listas = db.execute("SELECT * FROM listas WHERE estado='NEW' OR estado='RUN'").fetchall()
 
     for l in listas:
-        try:
-            result = verificar(l[1])
+        db.execute("UPDATE listas SET estado='RUN' WHERE id=?", (l[0],))
+        db.commit()
 
-            if result:
-                texto = format_output(result)
-                db.execute("UPDATE listas SET estado=?, resultado=? WHERE id=?",
-                           ("OK", texto, l[0]))
-            else:
-                db.execute("UPDATE listas SET estado=?, resultado=? WHERE id=?",
-                           ("INVALID", "❌ No válida", l[0]))
+        result = verificar(l[1])
 
-            db.commit()
-            time.sleep(1)  # 🔥 evita bloqueo
+        if result:
+            texto = format_output(result)
+            db.execute("UPDATE listas SET estado='OK', resultado=? WHERE id=?",
+                       (texto, l[0]))
+        else:
+            db.execute("UPDATE listas SET estado='BAD', resultado='❌ INVALID' WHERE id=?",
+                       (l[0],))
 
-        except Exception as e:
-            db.execute("UPDATE listas SET estado=?, resultado=? WHERE id=?",
-                       ("ERROR", str(e), l[0]))
-            db.commit()
+        db.commit()
+        time.sleep(1)
 
     return jsonify({"ok":True})
 
-# ===== EXPORT =====
-@app.route("/export")
-def export():
+# ===== GET RESULTADOS =====
+@app.route("/results")
+def results():
     db = get_db()
-    listas = db.execute("SELECT resultado FROM listas WHERE estado='OK'").fetchall()
+    listas = db.execute("SELECT * FROM listas").fetchall()
 
-    with open("hits.txt","w",encoding="utf-8") as f:
-        for l in listas:
-            f.write(l[0] + "\n\n")
+    data = []
+    for l in listas:
+        data.append({
+            "url": l[1],
+            "estado": l[2],
+            "resultado": l[3]
+        })
 
-    return send_file("hits.txt", as_attachment=True)
+    return jsonify(data)
+
+@app.route("/")
+def home():
+    return render_template("index.html")
 
 if __name__ == "__main__":
     app.run()
