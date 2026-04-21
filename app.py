@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, redirect, session, send_file
-import requests, time, threading
+import requests, threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from db import get_db, init_db
@@ -48,15 +48,35 @@ def fmt_fecha(ts):
     except:
         return "N/A"
 
-# ===== CANALES =====
+# ===== VERIFICAR STREAM REAL =====
+def canal_funciona(stream_url):
+    try:
+        r = requests.get(stream_url, timeout=4, stream=True)
+        return r.status_code == 200
+    except:
+        return False
+
+# ===== DETECTAR CANALES REALES =====
 def check_canales(url):
     try:
         r = requests.get(url, timeout=5)
-        if "#EXTM3U" in r.text:
-            return r.text.count("#EXTINF")
+        if "#EXTM3U" not in r.text:
+            return 0
+
+        lines = r.text.splitlines()
+        canales = [l for l in lines if l.startswith("http")]
+
+        validos = 0
+
+        # 🔥 SOLO PRUEBA LOS PRIMEROS 5 (anti bloqueo)
+        for c in canales[:5]:
+            if canal_funciona(c):
+                validos += 1
+
+        return validos
+
     except:
-        pass
-    return 0
+        return 0
 
 # ===== FORMATO =====
 def format_ok(c):
@@ -70,7 +90,7 @@ def format_ok(c):
 ├● 📅 ᴇxᴘɪʀᴀᴛɪᴏɴ : {c['exp']}
 ├● 🌐 ꜱᴇʀᴠᴇʀ : {c['server']}
 ├● 🕰️ ᴛɪᴍᴇᴢᴏɴᴇ : {c['timezone']}
-├● 📺 ᴄᴀɴᴀʟᴇꜱ : {c['canales']}
+├● 📺 ᴄᴀɴᴀʟᴇꜱ : {c['canales']} (reales)
 ├● ⚡ ꜱᴄᴀɴᴛʏᴩᴇ : combo scanner
 ├● 👤 нιт вʏ : PANEL PRO
 ╰───✦ 🚀
@@ -105,7 +125,13 @@ def verificar_one(row):
             db.commit()
             return
 
+        # 🔥 VALIDAR CANALES REALES
         canales = check_canales(url)
+
+        if canales == 0:
+            db.execute("UPDATE listas SET estado='BAD', resultado='❌ SIN CANALES FUNCIONALES' WHERE id=?", (id,))
+            db.commit()
+            return
 
         c = {
             "user": user,
@@ -128,7 +154,7 @@ def verificar_one(row):
         db.execute("UPDATE listas SET estado='ERROR', resultado='❌ ERROR' WHERE id=?", (id,))
         db.commit()
 
-# ===== BACKGROUND SCAN =====
+# ===== SCAN BACKGROUND =====
 def scan_background():
     db = get_db()
     listas = db.execute("SELECT * FROM listas").fetchall()
@@ -136,7 +162,7 @@ def scan_background():
     with ThreadPoolExecutor(max_workers=3) as executor:
         executor.map(verificar_one, listas)
 
-# ===== START SCAN =====
+# ===== START =====
 @app.route("/verificar")
 def scan():
     threading.Thread(target=scan_background).start()
@@ -159,10 +185,13 @@ def add():
     urls = request.json["urls"].split("\n")
     db = get_db()
 
+    # 🔥 LIMPIA ANTES DE AÑADIR (SOLUCIÓN REPETIDOS)
+    db.execute("DELETE FROM listas")
+
     for url in urls:
         url = url.strip()
         if url:
-            db.execute("INSERT OR IGNORE INTO listas (url,estado) VALUES (?,?)",(url,"NEW"))
+            db.execute("INSERT INTO listas (url,estado) VALUES (?,?)",(url,"NEW"))
 
     db.commit()
     return jsonify({"ok":True})
