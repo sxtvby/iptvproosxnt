@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify, redirect, session, send_file
 import requests, time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from db import get_db, init_db
 
 app = Flask(__name__)
@@ -40,12 +41,22 @@ def logout():
 def auth():
     return "user" in session
 
-# ===== FORMATEAR FECHA =====
+# ===== FORMATO FECHA =====
 def fmt_fecha(ts):
     try:
         return datetime.fromtimestamp(int(ts)).strftime('%d/%m/%Y')
     except:
         return "N/A"
+
+# ===== DETECCIÓN REAL DE CANALES =====
+def check_canales(m3u_url):
+    try:
+        r = requests.get(m3u_url, timeout=5)
+        if "#EXTM3U" in r.text:
+            return r.text.count("#EXTINF")
+        return 0
+    except:
+        return 0
 
 # ===== FORMATO FINAL =====
 def format_ok(c):
@@ -59,6 +70,7 @@ def format_ok(c):
 ├● 📅 ᴇxᴘɪʀᴀᴛɪᴏɴ : {c['exp']}
 ├● 🌐 ꜱᴇʀᴠᴇʀ : {c['server']}
 ├● 🕰️ ᴛɪᴍᴇᴢᴏɴᴇ : {c['timezone']}
+├● 📺 ᴄᴀɴᴀʟᴇꜱ : {c['canales']}
 ├● ⚡ ꜱᴄᴀɴᴛʏᴩᴇ : combo scanner
 ├● 👤 нιт вʏ : PANEL PRO
 ╰───✦ 🚀
@@ -66,8 +78,12 @@ def format_ok(c):
 🌐 ᴍ3ᴜ : {c['url']}
 """
 
-# ===== VERIFICACIÓN MEJORADA =====
-def verificar(url):
+# ===== VERIFICACIÓN =====
+def verificar_one(row):
+    id, url = row[0], row[1]
+
+    db = get_db()
+
     try:
         base = url.split("/get.php")[0]
         user = url.split("username=")[1].split("&")[0]
@@ -78,15 +94,22 @@ def verificar(url):
         r = requests.get(api, timeout=6)
 
         if r.status_code != 200:
-            return ("ERROR","❌ SIN RESPUESTA")
+            db.execute("UPDATE listas SET estado='ERROR', resultado='❌ SIN RESPUESTA' WHERE id=?", (id,))
+            db.commit()
+            return
 
         data = r.json()
-
         info = data.get("user_info", {})
         server = data.get("server_info", {})
 
         if info.get("auth") != 1:
-            return ("BAD","❌ INVALIDA")
+            db.execute("UPDATE listas SET estado='BAD', resultado='❌ INVALIDA' WHERE id=?", (id,))
+            db.commit()
+            return
+
+        # ===== CANALES REALES =====
+        m3u_url = url
+        canales = check_canales(m3u_url)
 
         c = {
             "user": user,
@@ -97,52 +120,27 @@ def verificar(url):
             "exp": fmt_fecha(info.get("exp_date")),
             "server": base,
             "timezone": server.get("timezone","N/A"),
+            "canales": canales,
             "url": url
         }
 
-        return ("OK", format_ok(c))
+        db.execute("UPDATE listas SET estado='OK', resultado=? WHERE id=?",
+                   (format_ok(c), id))
+        db.commit()
 
     except:
-        return ("ERROR","❌ ERROR")
+        db.execute("UPDATE listas SET estado='ERROR', resultado='❌ ERROR' WHERE id=?", (id,))
+        db.commit()
 
-# ===== HOME =====
-@app.route("/")
-def home():
-    if not auth():
-        return redirect("/login")
-    return render_template("index.html")
-
-# ===== ADD =====
-@app.route("/add", methods=["POST"])
-def add():
-    urls = request.json["urls"].split("\n")
-    db = get_db()
-
-    for url in urls:
-        url = url.strip()
-        if url:
-            db.execute("INSERT INTO listas (url,estado) VALUES (?,?)",(url,"NEW"))
-
-    db.commit()
-    return jsonify({"ok":True})
-
-# ===== VERIFICAR MÁS RÁPIDO =====
+# ===== VERIFICAR MULTI (ANTI BAN) =====
 @app.route("/verificar")
 def scan():
     db = get_db()
     listas = db.execute("SELECT * FROM listas").fetchall()
 
-    for l in listas:
-        db.execute("UPDATE listas SET estado='RUN' WHERE id=?", (l[0],))
-        db.commit()
-
-        estado, resultado = verificar(l[1])
-
-        db.execute("UPDATE listas SET estado=?, resultado=? WHERE id=?",
-                   (estado, resultado, l[0]))
-        db.commit()
-
-        time.sleep(0.3)  # 🔥 MÁS RÁPIDO (antes 1s)
+    # 🔥 THREADS CONTROLADOS (no te banean)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        executor.map(verificar_one, listas)
 
     return jsonify({"ok":True})
 
@@ -157,17 +155,38 @@ def results():
         for l in listas
     ])
 
-# ===== EXPORT TXT =====
+# ===== ADD =====
+@app.route("/add", methods=["POST"])
+def add():
+    urls = request.json["urls"].split("\n")
+    db = get_db()
+
+    for url in urls:
+        url = url.strip()
+        if url:
+            db.execute("INSERT OR IGNORE INTO listas (url,estado) VALUES (?,?)",(url,"NEW"))
+
+    db.commit()
+    return jsonify({"ok":True})
+
+# ===== EXPORT =====
 @app.route("/export")
 def export():
     db = get_db()
-    listas = db.execute("SELECT * FROM listas WHERE estado='OK'").fetchall()
+    listas = db.execute("SELECT resultado FROM listas WHERE estado='OK'").fetchall()
 
     with open("validas.txt","w",encoding="utf-8") as f:
         for l in listas:
-            f.write(l[3] + "\n\n")
+            f.write(l[0] + "\n\n")
 
     return send_file("validas.txt", as_attachment=True)
+
+# ===== HOME =====
+@app.route("/")
+def home():
+    if not auth():
+        return redirect("/login")
+    return render_template("index.html")
 
 if __name__ == "__main__":
     app.run()
