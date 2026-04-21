@@ -1,22 +1,22 @@
 <!DOCTYPE html>
 <html>
-<body style="background:#0f172a;color:white;text-align:center">
+<body style="background:black;color:#00ffcc;font-family:monospace;text-align:center">
 
-<h1>PANEL PRO</h1>
+<h1>⚡ PANEL PRO ⚡</h1>
 
 <textarea id="urls" style="width:90%;height:120px;"></textarea><br><br>
 
 <button onclick="add()">Añadir</button>
-<button onclick="scan()">Verificar</button>
-<a href="/export"><button>Exportar</button></a>
+<button onclick="start()">Iniciar Scan</button>
+
+<br><br>
+
+<div style="width:80%;margin:auto;background:#111">
+<div id="bar" style="height:20px;width:0%;background:#00ffcc"></div>
+</div>
 
 <h2>RESULTADOS</h2>
-
-{% for l in listas %}
-<div style="margin:10px;padding:10px;background:#020617">
-<pre>{{l[3] if l[3] else "⏳ Pendiente..."}}</pre>
-</div>
-{% endfor %}
+<div id="results"></div>
 
 <script>
 function add(){
@@ -24,11 +24,33 @@ fetch("/add",{
 method:"POST",
 headers:{"Content-Type":"application/json"},
 body:JSON.stringify({urls:document.getElementById("urls").value})
-}).then(()=>location.reload());
+});
 }
 
-function scan(){
-fetch("/scan").then(()=>location.reload());
+function start(){
+fetch("/scan");
+setInterval(load,2000);
+}
+
+function load(){
+fetch("/results")
+.then(res=>res.json())
+.then(data=>{
+let total = data.length;
+let ok = data.filter(x=>x.estado=="OK").length;
+
+let percent = total ? (ok/total)*100 : 0;
+document.getElementById("bar").style.width = percent+"%";
+
+let html = "";
+data.forEach(x=>{
+html += `<div style="border:1px solid #00ffcc;margin:10px;padding:10px">
+<pre>${x.resultado || "⏳ Verificando..."}</pre>
+</div>`;
+});
+
+document.getElementById("results").innerHTML = html;
+});
 }
 </script>
 
