@@ -2,42 +2,33 @@
 <html>
 <body style="background:#0f172a;color:white;text-align:center">
 
-<h1>🚀 PANEL PRO</h1>
+<h1>IPTV PANEL PRO</h1>
 
-<textarea id="urls" style="width:90%;height:100px;"></textarea><br><br>
+<textarea id="urls" style="width:90%;height:120px;"></textarea><br><br>
 
-<button onclick="start()">Añadir y Verificar</button>
-<a href="/export"><button>Exportar .txt</button></a>
+<button onclick="add()">Añadir y Verificar</button>
+<a href="/export"><button>Exportar TXT</button></a>
 
 <h2>Resultados</h2>
-<div id="resultados"></div>
+
+<div id="resultados">
+{% for l in listas %}
+<pre style="background:#020617;padding:10px;margin:10px;">{{l[2]}}</pre>
+{% endfor %}
+</div>
 
 <script>
-
-async function start(){
-
-    let urls = document.getElementById("urls").value;
-
-    await fetch("/add",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({urls:urls})
-    });
-
-    document.getElementById("urls").value = "";
-
-    await fetch("/scan");
-
-    location.reload();
+function add(){
+fetch("/add",{
+method:"POST",
+headers:{"Content-Type":"application/json"},
+body:JSON.stringify({urls:document.getElementById("urls").value})
+}).then(()=>{
+document.getElementById("urls").value=""
+location.reload()
+});
 }
-
 </script>
-
-{% for l in listas %}
-<div style="background:#020617;margin:10px;padding:10px;white-space:pre-line;">
-{{l[3] if l[3] else "❌ ERROR"}}
-</div>
-{% endfor %}
 
 </body>
 </html>
