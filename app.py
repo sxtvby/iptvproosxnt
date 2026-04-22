@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, redirect, session, send_file
-import requests, time
+import requests, time, random
 from datetime import datetime
 from db import get_db, init_db
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -49,7 +49,32 @@ def format_fecha(ts):
     except:
         return "N/A"
 
-# ===== VERIFICACIÓN (SIN CANALES) =====
+# ===== TEST STREAM REAL =====
+def probar_stream(base, user, password):
+    try:
+        api = f"{base}/player_api.php?username={user}&password={password}&action=get_live_streams"
+        r = requests.get(api, timeout=6)
+        data = r.json()
+
+        if not data:
+            return False
+
+        canal = random.choice(data)
+        stream_id = canal.get("stream_id")
+
+        if not stream_id:
+            return False
+
+        stream_url = f"{base}/live/{user}/{password}/{stream_id}.ts"
+
+        r = requests.get(stream_url, timeout=6, stream=True)
+
+        return r.status_code == 200
+
+    except:
+        return False
+
+# ===== VERIFICACIÓN PRO REAL =====
 def verificar(url):
     try:
         if "get.php" not in url:
@@ -72,6 +97,12 @@ def verificar(url):
         if info.get("auth") != 1:
             return "❌ ERROR - Cuenta inválida"
 
+        # 🔥 FILTRO REAL
+        stream_ok = probar_stream(base, user, password)
+
+        if not stream_ok:
+            return f"❌ ERROR STREAM (no cargan canales)\n{url}"
+
         resultado = f"""╭───✦ HIT HUNTER
 ├● 👑 ᴜꜱᴇʀ : {user}
 ├● 🔐 ᴩᴀꜱꜱ : {password}
@@ -92,7 +123,7 @@ def verificar(url):
         return resultado
 
     except:
-        return "❌ ERROR - No responde"
+        return "❌ ERROR GENERAL"
 
 # ===== HOME =====
 @app.route("/")
@@ -112,8 +143,6 @@ def add():
         return jsonify({"error":"login"})
 
     db = get_db()
-
-    # 🔥 BORRA RESULTADOS ANTERIORES
     db.execute("DELETE FROM listas")
 
     urls = request.json["urls"].split("\n")
@@ -127,7 +156,7 @@ def add():
     db.commit()
     return jsonify({"ok":True})
 
-# ===== EXPORT TXT =====
+# ===== EXPORT =====
 @app.route("/export")
 def export():
     db = get_db()
